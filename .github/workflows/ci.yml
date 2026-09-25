@@ -1,0 +1,45 @@
+name: PathoVision CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r backend/requirements.txt
+          pip install pytest
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+      - name: Python syntax
+        run: python -m compileall -q backend src *.py
+      - name: Unit tests
+        env:
+          PATHOVISION_DATABASE_URL: postgresql+psycopg://unused:unused@localhost:5432/unused
+          PATHOVISION_CELERY_BROKER_URL: amqp://unused:unused@localhost:5672/unused
+          PATHOVISION_REDIS_URL: redis://localhost:6379/0
+          PATHOVISION_AUTH_REQUIRED: "false"
+        run: pytest -q backend/tests
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install frontend dependencies
+        run: npm install
+      - name: Production build
+        run: npm run build

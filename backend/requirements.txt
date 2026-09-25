@@ -1,0 +1,13 @@
+fastapi>=0.116,<1.0
+uvicorn[standard]>=0.35,<1.0
+python-multipart>=0.0.20
+pydantic>=2.10,<3
+SQLAlchemy>=2.0.54,<2.1
+psycopg[binary]>=3.2,<4
+celery>=5.6,<5.7
+kombu>=5.6,<6
+redis>=8,<9
+PyJWT>=2.10,<3
+pwdlib[argon2]>=0.2,<1
+boto3>=1.40,<2
+prometheus-client>=0.23,<1

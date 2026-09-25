@@ -1,0 +1,18 @@
+# Install PyTorch + torchvision using:
+# https://pytorch.org/get-started/locally/
+#
+# Then install:
+h5py>=3.10
+gdown>=5.0
+numpy>=1.26
+pandas>=2.2
+scikit-learn>=1.5
+matplotlib>=3.9
+Pillow>=10.0
+tqdm>=4.66
+
+openslide-python>=1.4,<1.5
+openslide-bin>=4.0,<5
+opencv-python>=4.10
+
+joblib>=1.4

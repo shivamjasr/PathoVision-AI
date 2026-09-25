@@ -1,0 +1,198 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: pathovision
+      POSTGRES_USER: pathovision
+      POSTGRES_PASSWORD: pathovision
+    ports:
+      - "5432:5432"
+    volumes:
+      - pathovision_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pathovision -d pathovision"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    environment:
+      RABBITMQ_DEFAULT_USER: pathovision
+      RABBITMQ_DEFAULT_PASS: pathovision
+      RABBITMQ_DEFAULT_VHOST: pathovision
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - pathovision_rabbitmq:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:8-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - pathovision_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: pathovision
+      MINIO_ROOT_PASSWORD: pathovision-storage
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - pathovision_minio:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      PATHOVISION_STORAGE: /workspace/runtime
+      PATHOVISION_FRONTEND_ORIGIN: http://localhost:5173
+      PATHOVISION_AUTH_REQUIRED: "true"
+      PATHOVISION_BOOTSTRAP_USERNAME: admin
+      PATHOVISION_BOOTSTRAP_PASSWORD: pathovision
+      PATHOVISION_JWT_SECRET: ${PATHOVISION_JWT_SECRET:-dev-secret-change-before-deployment}
+      PATHOVISION_DATABASE_URL: postgresql+psycopg://pathovision:pathovision@postgres:5432/pathovision
+      PATHOVISION_CELERY_BROKER_URL: amqp://pathovision:pathovision@rabbitmq:5672/pathovision
+      PATHOVISION_CELERY_QUEUE: analysis
+      PATHOVISION_REDIS_URL: redis://redis:6379/0
+      PATHOVISION_CLASSIFIER_CHECKPOINT: /workspace/checkpoints/best_resnet18.pt
+      PATHOVISION_UNET_CHECKPOINT: /workspace/checkpoints/best_unet.pt
+      PATHOVISION_OBJECT_STORE_ENABLED: "true"
+      PATHOVISION_OBJECT_STORE_ENDPOINT: http://minio:9000
+      PATHOVISION_OBJECT_STORE_BUCKET: pathovision-artifacts
+      PATHOVISION_OBJECT_STORE_REGION: us-east-1
+      PATHOVISION_OBJECT_STORE_ACCESS_KEY: pathovision
+      PATHOVISION_OBJECT_STORE_SECRET_KEY: pathovision-storage
+    volumes:
+      - ./runtime:/workspace/runtime
+      - ./checkpoints:/workspace/checkpoints
+      - ./data:/workspace/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command:
+      - sh
+      - -c
+      - |
+        python -m backend.init_db
+        exec uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health/live', timeout=2)"
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      PATHOVISION_STORAGE: /workspace/runtime
+      PATHOVISION_DATABASE_URL: postgresql+psycopg://pathovision:pathovision@postgres:5432/pathovision
+      PATHOVISION_CELERY_BROKER_URL: amqp://pathovision:pathovision@rabbitmq:5672/pathovision
+      PATHOVISION_CELERY_QUEUE: analysis
+      PATHOVISION_REDIS_URL: redis://redis:6379/0
+      PATHOVISION_CLASSIFIER_CHECKPOINT: /workspace/checkpoints/best_resnet18.pt
+      PATHOVISION_UNET_CHECKPOINT: /workspace/checkpoints/best_unet.pt
+      PATHOVISION_OBJECT_STORE_ENABLED: "true"
+      PATHOVISION_OBJECT_STORE_ENDPOINT: http://minio:9000
+      PATHOVISION_OBJECT_STORE_BUCKET: pathovision-artifacts
+      PATHOVISION_OBJECT_STORE_REGION: us-east-1
+      PATHOVISION_OBJECT_STORE_ACCESS_KEY: pathovision
+      PATHOVISION_OBJECT_STORE_SECRET_KEY: pathovision-storage
+    volumes:
+      - ./runtime:/workspace/runtime
+      - ./checkpoints:/workspace/checkpoints
+      - ./data:/workspace/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    command:
+      - celery
+      - -A
+      - backend.app.celery_app.celery_app
+      - worker
+      - -Q
+      - analysis
+      - --loglevel=INFO
+      - --concurrency=1
+    restart: unless-stopped
+
+  flower:
+    image: mher/flower:2.2.0
+    command:
+      - celery
+      - --broker=amqp://pathovision:pathovision@rabbitmq:5672/pathovision
+      - flower
+      - --port=5555
+    ports:
+      - "5555:5555"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pathovision_pgdata:
+  pathovision_rabbitmq:
+  pathovision_redis:
+  pathovision_minio:
